@@ -3,6 +3,7 @@ import psycopg2.extras
 import os
 import hashlib
 from dotenv import load_dotenv
+from datetime import date
 
 # 載入 .env 檔案中的環境變數
 load_dotenv()
@@ -27,6 +28,7 @@ class DBHandler:
         self.config = config or DB_CONFIG
         self.conn = None
 
+   
     def connect(self):
         if not self.conn or self.conn.closed:
             self.conn = psycopg2.connect(**self.config)
@@ -36,8 +38,9 @@ class DBHandler:
         if self.conn and not self.conn.closed:
             self.conn.close()
 
+
     def setup_database(self):
-        conn = self.connect()
+        self.conn = self.connect()
         """從 schema.sql 檔案讀取並執行 SQL 腳本"""
         if not self.conn: return
         try:
@@ -57,7 +60,7 @@ class DBHandler:
         return hashlib.sha256(password.encode()).hexdigest()
 
     def create_user(self, name, account, password, permission='viewer', department=None):
-        conn = self.connect()
+        self.conn = self.connect()
         """新增使用者，並將密碼雜湊後存入"""
         if not self.conn: return None
         password_hash = self._hash_password(password)
@@ -81,7 +84,7 @@ class DBHandler:
             return None
 
     def get_user_permission(self, user_id):
-        conn = self.connect()
+        self.conn = self.connect()
         """取得指定使用者的權限等級"""
         if not self.conn: return None
         try:
@@ -95,7 +98,7 @@ class DBHandler:
 
     # --- 文章 CRUD ---
     def create_post(self, user_id, category_id, title, content, **kwargs):
-        conn = self.connect()
+        self.conn = self.connect()
         """新增文章 (只有 manager 和 editor 可以新增)"""
         if not self.conn: return None
         permission = self.get_user_permission(user_id)
@@ -117,7 +120,7 @@ class DBHandler:
             self.conn.rollback()
             return None
     def search_posts(self, keyword, source_type=None):
-        conn = self.connect()
+        self.conn = self.connect()
         """
         使用 ILIKE 搜尋文章
         :param keyword: 搜尋關鍵字
@@ -126,7 +129,7 @@ class DBHandler:
         if not self.conn: return []
         results = []
         try:
-            with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 # 使用 ILIKE 進行不分大小寫的模糊比對
                 query = """
                     SELECT
@@ -152,15 +155,15 @@ class DBHandler:
             print(f"搜尋時發生錯誤: {e}")
         return results
 
-    # --- 留言板功能 ---
+    # --- 留言板CURD ---
     def insert_bulletin_message(self, author_name, content, department=None, campus=None):
-        conn = self.connect()
-        if not self.conn:  return None
+        self.conn = self.connect()
+        if not self.conn: return None
         if not content or not content.strip():
             print("錯誤：留言內容不可為空。")
             return None
         
-        author_to_insert = author_name if author_name and author_name.strip() else '匿名訪客'
+        author_to_insert = author_name if author_name and author_name.strip() else None
         try:
             with self.conn.cursor() as cur:
                 sql = "INSERT INTO bulletin_messages (author_name, content, department, campus) VALUES (%s, %s, %s, %s) RETURNING id;"
@@ -185,7 +188,7 @@ class DBHandler:
             return None
 
     def get_all_bulletin_messages(self, page_size: int, offset: int) -> dict:
-        conn = self.connect()
+        self.conn = self.connect()
         """取得最新的留言板訊息"""
         if not self.conn: return []
         try:
@@ -199,40 +202,55 @@ class DBHandler:
             print(f"讀取留言時發生錯誤: {e}")
             return []
         
-    def update_bulletin_message(self, message_id, new_content, new_author=None, new_department=None, new_campus=None):
-        """【Update】更新一則已存在的留言"""
-        conn = self.connect()
-        if not self.conn: return False
-        if not new_content or not new_content.strip():
-            print("錯誤：更新的內容不可為空。")
-            return False
+
+    def get_messages_by_date(self, target_date: date, page_size: int, offset: int):
+        self.conn = self.connect()
+        """【新功能】根據特定日期 (YYYY-MM-DD) 取得留言"""
+        if not self.conn: return []
         try:
-            with self.conn.cursor() as cur:
+            with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 使用 ::date 將 TIMESTAMPTZ 轉換為 DATE 型別進行比較
                 sql = """
-                    UPDATE bulletin_messages
-                    SET content = %s, author_name = %s, department = %s, campus = %s
-                    WHERE id = %s;
+                    SELECT id, author_name, content, department, campus, created_at 
+                    FROM guestbook_messages 
+                    WHERE created_at::date = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s;
                 """
-                params = (new_content, new_author, new_department, new_campus, message_id)
-                cur.execute(sql, params)
-                
-                # cur.rowcount 會回傳受影響的行數，可用來判斷更新是否成功
-                if cur.rowcount == 0:
-                    print(f"更新失敗：找不到 ID 為 {message_id} 的留言。")
-                    self.conn.rollback()
-                    return False
-                
-            self.conn.commit()
-            print(f"ID 為 {message_id} 的留言已成功更新。")
-            return True
+                cur.execute(sql, (target_date, page_size, offset))
+                rows = cur.fetchall()
+                cur.execute("SELECT COUNT(*) FROM bulletin_messages")
+                total = cur.fetchone()['count']
+                return{'rows':rows, 'total':total}
         except psycopg2.Error as e:
-            print(f"更新留言 (ID: {message_id}) 時發生錯誤: {e}")
-            self.conn.rollback()
-            return False
+            print(f"按日期查詢留言時發生錯誤: {e}")
+            return []
+
+    def get_messages_by_campus_and_department(self, campus: str, department: str, page_size: int, offset: int):
+        self.conn = self.connect()
+        """【新功能】根據校區和系所取得留言 (兩者皆須提供)"""
+        if not self.conn: return []
+        try:
+            with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                sql = """
+                    SELECT id, author_name, content, department, campus, created_at 
+                    FROM guestbook_messages 
+                    WHERE campus = %s AND department = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s;;
+                """
+                cur.execute(sql, (campus, department, page_size, offset))
+                rows = cur.fetchall()
+                cur.execute("SELECT COUNT(*) FROM bulletin_messages")
+                total = cur.fetchone()['count']
+                return{'rows':rows, 'total':total}
+        except psycopg2.Error as e:
+            print(f"按校區和系所查詢留言時發生錯誤: {e}")
+            return []
         
 
     def delete_bulletin_message(self, message_id):
-        conn = self.connect()
+        self.conn = self.connect()
         """【Delete】刪除一則留言"""
         if not self.conn: return False
         try:
@@ -270,15 +288,28 @@ if __name__ == "__main__":
             # db.create_user("SHD", "manager01", "shdadmin", permission="manager")
 
             # print("\n--- 3. 示範留言板功能 ---")
-            # db.insert_bulletin_message("路人甲", "這個網站做得真不錯！", campus="義大醫院", department="智慧醫療部")
-            # db.insert_bulletin_message("熱心鄉民", "請問 AI 研討會什麼時候報名？", campus="義大癌治療醫院")
-                # db.insert_bulletin_message(author_name=None, content="這個網站錯！", campus="義大醫院", department="智慧醫療部")
+            # db.create_bulletin_message("路人甲", "這個網站做得真不錯！", campus="義大醫院", department="智慧醫療部")
+            # db.create_bulletin_message("熱心鄉民", "請問 AI 研討會什麼時候報名？", campus="義大癌治療醫院")
 
-            print("\n--- 3. 示範留言板功能 ---")
-            db.delete_bulletin_message(4)
+            # print("\n--- 4. 刪除指定布告欄訊息 ---")
+            # db.delete_bulletin_message(1)
 
-            print("\n--- 4. 讀取留言板 ---")
-            messages = db.get_all_bulletin_messages(10,0)
+            # print("\n--- 5. 讀取留言板 ---")
+            # messages = db.get_all_bulletin_messages(10,0)
+            # if messages["total"]:
+            #     print(f"顯示最新的 {messages['total']} 則留言：")
+            #     for msg in messages['rows']:
+            #         print(f"  [{msg['created_at'].strftime('%Y-%m-%d %H:%M')}] {msg['author_name']}: {msg['content']}")
+
+            print("\n--- 6. 讀某日留言板 ---")
+            messages = db.get_bulletin_messages_by_date(10,0,date="2025-08-27")
+            if messages["total"]:
+                print(f"顯示最新的 {messages['total']} 則留言：")
+                for msg in messages['rows']:
+                    print(f"  [{msg['created_at'].strftime('%Y-%m-%d %H:%M')}] {msg['author_name']}: {msg['content']}")
+
+            print("\n--- 7. 讀取某部門留言板 ---")
+            messages = db.get_all_bulletin_messages(10,0,campus="義大醫院",department="智慧醫療部")
             if messages["total"]:
                 print(f"顯示最新的 {messages['total']} 則留言：")
                 for msg in messages['rows']:
@@ -289,4 +320,3 @@ if __name__ == "__main__":
             print("程式因資料庫連線問題而終止。")
         except Exception as e:
             print(f"發生未預期的錯誤: {e}")
-

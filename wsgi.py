@@ -4,7 +4,7 @@ import logging
 import time
 
 # 設定日誌
-logging.basicConfig(filename="servre.log", level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger('waitress')
 logger.info("Starting server on http://127.0.0.1:5004")
 
