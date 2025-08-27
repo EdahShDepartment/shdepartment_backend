@@ -27,29 +27,17 @@ class DBHandler:
         self.config = config or DB_CONFIG
         self.conn = None
 
-    def __enter__(self):
-        """
-        進入 'with' 區塊時自動呼叫此方法，建立並返回資料庫連線。
-        """
-        try:
-            print("正在嘗試連接到資料庫...")
+    def connect(self):
+        if not self.conn or self.conn.closed:
             self.conn = psycopg2.connect(**self.config)
-            print("資料庫連接成功！")
-            return self  # 返回物件本身，以便在 with 區塊中呼叫其方法
-        except psycopg2.OperationalError as e:
-            print(f"錯誤：無法連接到資料庫 '{self.config.get('dbname')}'.\n{e}")
-            # 拋出異常，這樣 with 區塊外的 try...except 才能捕獲到
-            raise
+        return self.conn
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        離開 'with' 區塊時自動呼叫此方法，確保連線被關閉。
-        """
-        if self.conn:
+    def close(self):
+        if self.conn and not self.conn.closed:
             self.conn.close()
-            print("\n資料庫連線已自動關閉。")
 
     def setup_database(self):
+        conn = self.connect()
         """從 schema.sql 檔案讀取並執行 SQL 腳本"""
         if not self.conn: return
         try:
@@ -69,6 +57,7 @@ class DBHandler:
         return hashlib.sha256(password.encode()).hexdigest()
 
     def create_user(self, name, account, password, permission='viewer', department=None):
+        conn = self.connect()
         """新增使用者，並將密碼雜湊後存入"""
         if not self.conn: return None
         password_hash = self._hash_password(password)
@@ -92,6 +81,7 @@ class DBHandler:
             return None
 
     def get_user_permission(self, user_id):
+        conn = self.connect()
         """取得指定使用者的權限等級"""
         if not self.conn: return None
         try:
@@ -105,6 +95,7 @@ class DBHandler:
 
     # --- 文章 CRUD ---
     def create_post(self, user_id, category_id, title, content, **kwargs):
+        conn = self.connect()
         """新增文章 (只有 manager 和 editor 可以新增)"""
         if not self.conn: return None
         permission = self.get_user_permission(user_id)
@@ -126,6 +117,7 @@ class DBHandler:
             self.conn.rollback()
             return None
     def search_posts(self, keyword, source_type=None):
+        conn = self.connect()
         """
         使用 ILIKE 搜尋文章
         :param keyword: 搜尋關鍵字
@@ -161,13 +153,14 @@ class DBHandler:
         return results
 
     # --- 留言板功能 ---
-    def create_bulletin_message(self, author_name, content, department=None, campus=None):
-        if not self.conn: return None
+    def insert_bulletin_message(self, author_name, content, department=None, campus=None):
+        conn = self.connect()
+        if not self.conn:  return None
         if not content or not content.strip():
             print("錯誤：留言內容不可為空。")
             return None
         
-        author_to_insert = author_name if author_name and author_name.strip() else None
+        author_to_insert = author_name if author_name and author_name.strip() else '匿名訪客'
         try:
             with self.conn.cursor() as cur:
                 sql = "INSERT INTO bulletin_messages (author_name, content, department, campus) VALUES (%s, %s, %s, %s) RETURNING id;"
@@ -192,6 +185,7 @@ class DBHandler:
             return None
 
     def get_all_bulletin_messages(self, page_size: int, offset: int) -> dict:
+        conn = self.connect()
         """取得最新的留言板訊息"""
         if not self.conn: return []
         try:
@@ -205,8 +199,9 @@ class DBHandler:
             print(f"讀取留言時發生錯誤: {e}")
             return []
         
-    def insert_bulletin_message(self, message_id, new_content, new_author=None, new_department=None, new_campus=None):
+    def update_bulletin_message(self, message_id, new_content, new_author=None, new_department=None, new_campus=None):
         """【Update】更新一則已存在的留言"""
+        conn = self.connect()
         if not self.conn: return False
         if not new_content or not new_content.strip():
             print("錯誤：更新的內容不可為空。")
@@ -237,6 +232,7 @@ class DBHandler:
         
 
     def delete_bulletin_message(self, message_id):
+        conn = self.connect()
         """【Delete】刪除一則留言"""
         if not self.conn: return False
         try:
@@ -264,25 +260,29 @@ if __name__ == "__main__":
     else:
         try:
             # 使用 with 語句來管理 DBHandler 物件
-            with DBHandler(DB_CONFIG) as db:
-                # --- 在這裡執行所有資料庫操作 ---
-                
-                print("\n--- 1. 初始化資料庫 ---")
-                db.setup_database()
+            db = DBHandler()
+            # --- 在這裡執行所有資料庫操作 ---
+            
+            # print("\n--- 1. 初始化資料庫 ---")
+            # db.setup_database()
 
-                print("\n--- 2. 建立使用者 ---")
-                db.create_user("SHD", "manager01", "shdadmin", permission="manager")
+            # print("\n--- 2. 建立使用者 ---")
+            # db.create_user("SHD", "manager01", "shdadmin", permission="manager")
 
-                # print("\n--- 3. 示範留言板功能 ---")
-                # db.create_bulletin_message("路人甲", "這個網站做得真不錯！", campus="義大醫院", department="智慧醫療部")
-                # db.create_bulletin_message("熱心鄉民", "請問 AI 研討會什麼時候報名？", campus="義大癌治療醫院")
+            # print("\n--- 3. 示範留言板功能 ---")
+            # db.insert_bulletin_message("路人甲", "這個網站做得真不錯！", campus="義大醫院", department="智慧醫療部")
+            # db.insert_bulletin_message("熱心鄉民", "請問 AI 研討會什麼時候報名？", campus="義大癌治療醫院")
+                # db.insert_bulletin_message(author_name=None, content="這個網站錯！", campus="義大醫院", department="智慧醫療部")
 
-                # print("\n--- 4. 讀取留言板 ---")
-                # messages = db.get_all_bulletin_messages(10,0)
-                # if messages["total"]:
-                #     print(f"顯示最新的 {messages['total']} 則留言：")
-                #     for msg in messages['rows']:
-                #         print(f"  [{msg['created_at'].strftime('%Y-%m-%d %H:%M')}] {msg['author_name']}: {msg['content']}")
+            print("\n--- 3. 示範留言板功能 ---")
+            db.delete_bulletin_message(4)
+
+            print("\n--- 4. 讀取留言板 ---")
+            messages = db.get_all_bulletin_messages(10,0)
+            if messages["total"]:
+                print(f"顯示最新的 {messages['total']} 則留言：")
+                for msg in messages['rows']:
+                    print(f"  [{msg['created_at'].strftime('%Y-%m-%d %H:%M')}] {msg['author_name']}: {msg['content']}")
 
         except psycopg2.OperationalError:  
             # 如果連線在 __enter__ 中就失敗了，會在這裡捕獲到
