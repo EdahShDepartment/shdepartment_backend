@@ -1,9 +1,11 @@
 -- 刪除舊有的資料表 (如果存在)，CASCADE 會一併移除相關的相依性
 DROP TABLE IF EXISTS bulletin_messages, post_hashtags, attachments, posts, users, categories, hashtags CASCADE;
 DROP TYPE IF EXISTS user_permission; -- 如果 ENUM 型別已存在，先刪除
+DROP TYPE IF EXISTS perental_category_type; -- 如果 ENUM 型別已存在，先刪除
 
 -- 建立一個自訂的 ENUM 型別來限制 permission 欄位的值
 CREATE TYPE user_permission AS ENUM ('manager', 'editor', 'viewer');
+CREATE TYPE category_enum AS ENUM ('latest_news', 'instructions'); -- 定義頂層分類的類型
 
 -- 使用者資料表 (增加帳號、密碼雜湊、權限)
 CREATE TABLE users (
@@ -13,15 +15,16 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL, -- 儲存雜湊後的密碼，長度較長
     permission user_permission NOT NULL DEFAULT 'viewer', -- 權限欄位，使用自訂型別
     department VARCHAR(100),
-    campus VARCHAR(100)
+    campus VARCHAR(100),
+    CONSTRAINT chk_account_is_email CHECK (account ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$')
 );
 
--- 分類資料表 (維持階層結構)
+-- 【新】單一分類資料表
 CREATE TABLE categories (
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE,
-    parent_id INT,
-    CONSTRAINT fk_parent_category FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE SET NULL
+    category_type category_enum NOT NULL
+    
 );
 
 -- 標籤資料表
@@ -49,10 +52,10 @@ CREATE TABLE posts (
 -- 附件資料表
 CREATE TABLE attachments (
     id SERIAL PRIMARY KEY,
-    post_id INT NOT NULL,
+    post_id INT,
     file_path VARCHAR(1024) NOT NULL,
     original_filename VARCHAR(255),
-    file_extension VARCHAR(10),
+    --- file_extension VARCHAR(10),
     FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE
 );
 
@@ -75,8 +78,3 @@ CREATE TABLE bulletin_messages (
     created_at TIMESTAMP NOT NULL DEFAULT NOW() -- 留言時間 (對應您的 date 需求)
 );
 
-
--- 建立索引
-CREATE INDEX idx_categories_parent_id ON categories(parent_id);
--- CREATE INDEX idx_posts_title ON posts USING GIN (to_tsvector('chinese', title));
-CREATE INDEX idx_bulletin_created_at ON bulletin_messages(created_at DESC); -- 為留言板時間建立索引
