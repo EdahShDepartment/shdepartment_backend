@@ -222,15 +222,37 @@ class DBHandler:
         except psycopg2.Error as e:
             print(f"尋找分類時發生錯誤: {e}")
             return []
+    
+    # --- 上傳文件 ---
+    def upload_file(self, attachments):
+        try:
+            with self.conn.cursor() as cur:
+                if attachments and isinstance(attachments, list):
+                        attachment_sql = "INSERT INTO attachments (post_id, file_path, original_filename) VALUES %s;"
+                        args_list = [(None, att.get('path'), att.get('original_filename')) for att in attachments]
+                        psycopg2.extras.execute_values(cur, attachment_sql, args_list)
+                self.conn.commit()
+                print(f"已成功上傳檔案'{attachments}'")
+                return True
+        except psycopg2.Error as e:
+            print(f"上傳檔案時發生錯誤: {e}")
+            self.conn.rollback()
+            return False
+        
+    def get_files(self):
+        return None
+
+    def delete_files(self, att_id):
+        return None
 
     # --- 文章 CRUD ---
-    def insert_post(self, title, content, user_id, category_id, main_image_url=None, attachments=None, hashtags=None):
+    def insert_post(self, title, content, user_id, category_id, main_image_url=None, hashtags=None):
         try:
             with self.conn.cursor() as cur:
                 # 新增 post 主體並取得返回的 post ID
                 post_sql = """
                     INSERT INTO posts (title, content, user_id, category_id, main_image_url)
-                    VALUES (%s, %s, %s, %s, %s) RETURNING id;
+                VALUES (%s, %s, %s, %s, %s) RETURNING id;
                 """
                 cur.execute(post_sql, (title, content, user_id, category_id, main_image_url))
                 
@@ -240,10 +262,10 @@ class DBHandler:
                 post_id = result[0]
 
                 # 如果有提供附件，則將它們新增到 attachments 表
-                if attachments and isinstance(attachments, list):
-                    attachment_sql = "INSERT INTO attachments (post_id, file_path, original_filename) VALUES %s;"
-                    args_list = [(post_id, att.get('path'), att.get('original_filename')) for att in attachments]
-                    psycopg2.extras.execute_values(cur, attachment_sql, args_list)
+                # if attachments and isinstance(attachments, list):
+                #     attachment_sql = "INSERT INTO attachments (post_id, file_path, original_filename) VALUES %s;"
+                #     args_list = [(post_id, att.get('path'), att.get('original_filename')) for att in attachments]
+                #     psycopg2.extras.execute_values(cur, attachment_sql, args_list)
 
                 # 處理標籤
                 if hashtags and isinstance(hashtags, list):
@@ -500,7 +522,7 @@ if __name__ == "__main__":
                 # db.insert_bulletin_message("熱心鄉民", "請問 AI 研討會什麼時候報名？", campus="義大癌治療醫院")
 
                 # print("\n--- 2. 刪除指定布告欄訊息 ---")
-                # db.delete_bulletin_message(2)
+                # db.delete_bulletin_message(15)
 
                 # print("\n--- 3. 讀取留言板 ---")
                 # messages = db.get_bulletin_messages(page_size=10,offset=0,campus='義大醫院')

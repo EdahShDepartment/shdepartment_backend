@@ -1,5 +1,5 @@
 from db_handler import DBHandler
-from flask import Flask, jsonify, request, send_from_directory, g
+from flask import Flask, jsonify, request, send_from_directory, g, url_for
 from flask_cors import CORS
 from datetime import datetime, date
 import os
@@ -28,9 +28,10 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # 建立上傳資料夾 (如果不存在)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'images'), exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_FOLDER, 'attachments'), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_FOLDER, 'files'), exist_ok=True)
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# def allowed_file(filename):
+#     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # def save_base64_file(file_data, subfolder):
 #     try:
@@ -46,46 +47,46 @@ def allowed_file(filename):
 #     except Exception as e:
 #         print(f"Base64 解碼或儲存失敗: {e}")
 #         return None
-def save_uploaded_file(file, subfolder):
-    """安全地儲存上傳的檔案並返回其相對路徑"""
-    if file and file.filename != '' and allowed_file(file.filename):
-        original_filename = secure_filename(file.filename)
-        unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
-        save_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder, unique_filename)
-        file.save(save_path)
-        return os.path.join(subfolder, unique_filename).replace("\\", "/")
-    return None
+# def save_uploaded_file(file, subfolder):
+#     """安全地儲存上傳的檔案並返回其相對路徑"""
+#     if file and file.filename != '' and allowed_file(file.filename):
+#         original_filename = secure_filename(file.filename)
+#         unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
+#         save_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder, unique_filename)
+#         file.save(save_path)
+#         return os.path.join(subfolder, unique_filename).replace("\\", "/")
+#     return None
 
 
 
-def scrape_and_save_image(html_content):
-    """從 HTML 內容中解析、下載並儲存第一張圖片"""
-    soup = BeautifulSoup(html_content, 'html.parser')
-    img_tag = soup.find('img')
+# def scrape_and_save_image(html_content):
+#     """從 HTML 內容中解析、下載並儲存第一張圖片"""
+#     soup = BeautifulSoup(html_content, 'html.parser')
+#     img_tag = soup.find('img')
     
-    if not img_tag or not img_tag.get('src'):
-        return None
+#     if not img_tag or not img_tag.get('src'):
+#         return None
 
-    image_url = img_tag['src']
-    try:
-        response = requests.get(image_url, stream=True, timeout=5)
-        response.raise_for_status()
+#     image_url = img_tag['src']
+#     try:
+#         response = requests.get(image_url, stream=True, timeout=5)
+#         response.raise_for_status()
         
-        original_filename = secure_filename(image_url.split('/')[-1].split('?')[0])
-        if not original_filename: original_filename = "scraped_image.jpg"
+#         original_filename = secure_filename(image_url.split('/')[-1].split('?')[0])
+#         if not original_filename: original_filename = "scraped_image.jpg"
 
-        unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
-        save_path = os.path.join(app.config['UPLOAD_FOLDER'], 'images', unique_filename)
+#         unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
+#         save_path = os.path.join(app.config['UPLOAD_FOLDER'], 'images', unique_filename)
         
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+#         with open(save_path, 'wb') as f:
+#             for chunk in response.iter_content(chunk_size=8192):
+#                 f.write(chunk)
         
-        print(f"成功從 {image_url} 抓取圖片")
-        return os.path.join('images', unique_filename).replace("\\", "/")
-    except requests.RequestException as e:
-        print(f"抓取圖片失敗: {e}")
-        return None
+#         print(f"成功從 {image_url} 抓取圖片")
+#         return os.path.join('images', unique_filename).replace("\\", "/")
+#     except requests.RequestException as e:
+#         print(f"抓取圖片失敗: {e}")
+#         return None
 
 
 # --- Permission Decorator (安全驗證) ---
@@ -157,7 +158,62 @@ def handle_delete_category(category_id):
         else:
             return jsonify({'status': 404, 'message': '找不到要刪除的分類', 'success': False}), 404
 
+# --- upload file / attachment / image_url ---
+
+@app.route('/api/upload', methods=['POST'])
+@permission_required(['manager', 'editor']) # 建議加上權限控管
+def upload_file():
+    """
+    專門用來處理檔案上傳的 API。
+    接收一個 multipart/form-data 請求，其中包含一個名為 'file' 的檔案。
+    """
+    if 'file' not in request.files:
+        return jsonify({'status': 400, 'message': '請求中未包含檔案', 'success': False}), 400
     
+    files = request.files.getlist('files', [])
+    if files == []:
+        return jsonify({'status': 400, 'message': '未選擇檔案', 'success': False}), 400
+
+    if files:
+        subfolder = request.form.get('subfolder')
+
+        attachments_list = []    
+        for file in files:
+            original_filename = secure_filename(file.filename)
+            unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
+            save_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder, unique_filename)
+            file.save(save_path)
+
+            # 產生一個可以讓前端直接使用的公開 URL
+            # 注意：這需要您設定一個靜態檔案路由 (如下面的 /uploads/<path:filename>))
+            attachments_list.append({
+                            'path': url_for('serve_uploaded_file', filename=f"{subfolder}/{unique_filename}", _external=True),
+                            'original_filename': original_filename
+                        })
+
+        if subfolder in ['attachments','files']:
+            with DBHandler() as db:
+                success = db.upload_file(files)
+                if not success: return jsonify({'status': 500, 'message': '檔案上傳資料庫失敗', 'success': False}), 500
+
+        return jsonify({
+            'status': 201,
+            'message': '檔案上傳成功',
+            'url': attachments_list,
+            'success': True
+        }), 201
+    
+    return jsonify({'status': 500, 'message': '檔案上傳失敗', 'success': False}), 500
+
+
+
+# --- Static File Route ---
+@app.route('/uploads/<path:filename>')
+def serve_uploaded_file(filename):
+    """提供一個路由來讓外界可以存取 uploads 資料夾中的檔案"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+ 
+
 # --- posts CURD ---
 @app.route('/api/posts', methods=['GET', 'POST'])
 def handle_posts():
@@ -188,19 +244,11 @@ def handle_posts():
                 return jsonify({'status': 400, 'message': f"缺少欄位: {required}", 'success': False}), 400
             
             # 處理 main_image
-            main_image_url = None
-            main_image_url = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
+            soup = BeautifulSoup(data['content'], 'html.parser')
+            img_tag = soup.find('img')
+            main_image_url = img_tag['src'] if img_tag else None
+            # main_image_url = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
             
-            attachments_list = []
-            uploaded_attachments = request.files.getlist('attachments')
-            for file in uploaded_attachments:
-                path = save_uploaded_file(file, 'attachments')
-                if path:
-                    attachments_list.append({
-                        'path': path,
-                        'original_filename': secure_filename(file.filename)
-                    })
-
             hashtags_list = [f for f in data.get('hashtags', [])]
             
 
@@ -211,7 +259,7 @@ def handle_posts():
                     user_id=g.user['id'],
                     category_id=data['category_id'],
                     main_image_url=main_image_url,
-                    attachments=attachments_list,
+                    # attachments=attachments_list,
                     hash_tags = hashtags_list
                     )
             if post_id:
@@ -259,19 +307,11 @@ def handle_post_by_id(post_id):
                         update_data_for_db[field] = data[field]
                 
                 # 處理主圖
-                update_data_for_db['main_image_url'] = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
+                soup = BeautifulSoup(data['content'], 'html.parser')
+                img_tag = soup.find('img')
+                main_image_url = img_tag['src'] if img_tag else None
+                # update_data_for_db['main_image_url'] = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
                 
-                # 處理附件
-                attachments_list = []
-                uploaded_attachments = request.files.getlist('attachments')
-                for file in uploaded_attachments:
-                    path = save_uploaded_file(file, 'attachments')
-                    if path:
-                        attachments_list.append({
-                            'path': path,
-                            'original_filename': secure_filename(file.filename)
-                        })
-                    update_data_for_db['attachments'] = attachments_list
                 
                 # 處理標籤
                 hashtags_list = [f for f in data.get('hashtags', [])]
@@ -315,6 +355,7 @@ def handle_bulletin_messages():
                 department=data.get('department'), campus=data.get('campus')
             )
         if message_id:
+            print(message_id)
             return jsonify({'status': 200, 'message': "留言新增成功", 'id': message_id, 'success': True}), 201
         else:
             return jsonify({'status': 500, 'message': "無法新增留言", 'success': False}), 500
@@ -325,5 +366,5 @@ def handle_delete_bulletin_message(message_id):
         success = db.delete_bulletin_message(message_id)
         return jsonify({'status': 200, 'message': "留言刪除成功", 'success': True}) if success else jsonify({'status': 404, 'message': "找不到要刪除的留言", 'success': False}), 404
 if __name__ == "__main__":
-    print(scrape_and_save_image("<p>..</p><img src='https://images.pexels.com/photos/6347919/pexels-photo-6347919.jpeg?_gl=1*eun6qt*_ga*Nzc3OTQ5ODg2LjE3NTY0Mjg2MjY.*_ga_8JE65Q40S6*czE3NTY0Mjg2MjYkbzEkZzEkdDE3NTY0Mjg2MzYkajUwJGwwJGgw'><h1></h1>"))
     # app.run(debug=True, port=5004)
+    handle_bulletin_messages()

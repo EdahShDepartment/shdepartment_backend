@@ -52,7 +52,7 @@ CREATE TABLE posts (
 -- 附件資料表
 CREATE TABLE attachments (
     id SERIAL PRIMARY KEY,
-    post_id INT,
+    post_id INT NULL,
     file_path VARCHAR(1024) NOT NULL,
     original_filename VARCHAR(255),
     --- file_extension VARCHAR(10),
