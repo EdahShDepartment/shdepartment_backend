@@ -198,7 +198,15 @@ class DBHandler:
         except psycopg2.Error as e:
             self.conn.rollback()
             return False
-
+    
+    def get_type_by_category(self, category_id):
+        try:
+            with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT category_type FROM categories WHERE category_id = %s;", (category_id))
+        except psycopg2.Error as e:
+            print(f"尋找子分類時發生錯誤: {e}")
+            return None
+        
     def get_categories_by_type(self, category_type: str):
         try:
             with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -440,11 +448,13 @@ class DBHandler:
             return []
     
     # --- 留言板CURD ---
-    def insert_bulletin_message(self, author_name, content, department=None, campus=None):
+    def insert_bulletin_message(self, content, author_name=None, department=None, campus=None):
         try:
             with self.conn.cursor() as cur:
                 sql = "INSERT INTO bulletin_messages (author_name, content, department, campus) VALUES (%s, %s, %s, %s) RETURNING id;"
-                author_to_insert = author_name if author_name and author_name.strip() else None
+                author_to_insert = author_name if author_name else "匿名訪客"
+                author_to_insert = author_to_insert if author_to_insert and author_to_insert.strip() else None
+
                 cur.execute(sql, (author_to_insert, content, department, campus))
                 result = cur.fetchone()
                 if result:

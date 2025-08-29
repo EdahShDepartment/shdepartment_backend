@@ -359,12 +359,19 @@ def handle_bulletin_messages():
             return jsonify({'status': 200, 'message': "留言新增成功", 'id': message_id, 'success': True}), 201
         else:
             return jsonify({'status': 500, 'message': "無法新增留言", 'success': False}), 500
+  
 
 @app.route('/api/bulletin_messages/<int:message_id>', methods=['DELETE'])
 def handle_delete_bulletin_message(message_id):
-    with DBHandler() as db:
-        success = db.delete_bulletin_message(message_id)
-        return jsonify({'status': 200, 'message': "留言刪除成功", 'success': True}) if success else jsonify({'status': 404, 'message': "找不到要刪除的留言", 'success': False}), 404
+    try:
+        with DBHandler() as db:
+            success = db.delete_bulletin_message(message_id)
+            if success:
+                return jsonify({'status': 200, 'message': "留言刪除成功", 'success': True})
+            else:
+                return jsonify({'status': 404, 'message': "找不到要刪除的留言或刪除失敗", 'success': False}), 404
+    except Exception as e:
+        return jsonify({'status': 500, 'message': '伺服器發生未預期的錯誤'}), 500
+    
 if __name__ == "__main__":
-    # app.run(debug=True, port=5004)
-    handle_bulletin_messages()
+    app.run(debug=True, port=5004)
