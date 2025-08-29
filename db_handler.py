@@ -363,7 +363,7 @@ class DBHandler:
     def get_post(self, post_id):
         try:
             with self.conn.cursor(psycopg2.extras.RealDictCursor) as cur:
-                sql = f"SELECT id, title, content, main_image_url, user_id, category_id, click_count, announcement_date FROM posts WHERE id = %s;"
+                sql = f"SELECT id, title, content, main_image_url, user_id, category_id, click_count, announcement_date FROM posts WHERE id = %s ;"
                 cur.execute(sql, (post_id))
                 return cur.fetchall()
         except psycopg2.Error as e:
@@ -372,11 +372,13 @@ class DBHandler:
             
         
 
-    def get_posts(self, filters=None, page_size=10, offset=0):
+    def get_posts(self, filters=None, order_by='announcement_date', page_size=10, offset=0):
         """
         【新功能】根據多種條件動態查詢文章。
         filters 是一個字典，例如: {'title_keyword': '競賽'}, {'category_id': 1}, {'user_id': 1}
         """
+        if order_by not in ['announcement_date', 'click_count']:
+            order_by = 'announcement_date'
         try:
             with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 where_clauses = []
@@ -394,18 +396,23 @@ class DBHandler:
                         params.append(filters['user_id'])
                 
                 where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+            
+                count_sql = f"SELECT COUNT(*) as total FROM categories WHERE {where_sql} ;"
+                cur.execute(count_sql)
+                total = cur.fetchone()['total']
                 
                 sql = f"""
                     SELECT id, title, content, main_image_url, user_id, category_id, click_count, announcement_date
                     FROM posts
                     WHERE {where_sql}
-                    ORDER BY announcement_date DESC
+                    ORDER BY {order_by} DESC
                     LIMIT %s OFFSET %s;
                 """
                 params.extend([page_size, offset])
                 
                 cur.execute(sql, tuple(params))
-                return [dict(row) for row in cur.fetchall()]
+                messages = [dict(row) for row in cur.fetchall()]
+                return {'total': total, 'rows': messages}
         except psycopg2.Error as e:
             print(f"查詢文章時發生錯誤: {e}")
             return []
@@ -466,6 +473,7 @@ class DBHandler:
         except psycopg2.Error as e:
             self.conn.rollback()
             return False
+
 
 
 # --- 主執行區塊 ---
@@ -543,7 +551,6 @@ if __name__ == "__main__":
                 # message = db.get_posts()
                 # print(message)
                 print()
-
 
         except psycopg2.OperationalError:  
             # 如果連線在 __enter__ 中就失敗了，會在這裡捕獲到

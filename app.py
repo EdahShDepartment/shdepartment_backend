@@ -11,6 +11,7 @@ import base64
 import re
 import binascii
 from functools import wraps
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -21,7 +22,7 @@ app.config['DOCUMENT_FOLDER'] = './static/'
 app.config['JSON_AS_ASCII'] = False
 
 # --- File Upload Configuration ---
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = './uploads/'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'doc', 'docx', 'zip'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # 建立上傳資料夾 (如果不存在)
@@ -31,20 +32,30 @@ os.makedirs(os.path.join(UPLOAD_FOLDER, 'attachments'), exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def save_base64_file(file_data, subfolder):
-    try:
-        filename = file_data.get('filename')
-        base64_str = file_data.get('data')
-        if not all([filename, base64_str]): return None
-        _, encoded = base64_str.split(",", 1)
-        data = base64.b64decode(encoded)
-        unique_filename = f"{uuid.uuid4().hex}_{secure_filename(filename)}"
+# def save_base64_file(file_data, subfolder):
+#     try:
+#         filename = file_data.get('filename')
+#         base64_str = file_data.get('data')
+#         if not all([filename, base64_str]): return None
+#         _, encoded = base64_str.split(",", 1)
+#         data = base64.b64decode(encoded)
+#         unique_filename = f"{uuid.uuid4().hex}_{secure_filename(filename)}"
+#         save_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder, unique_filename)
+#         with open(save_path, "wb") as f: f.write(data)
+#         return os.path.join(subfolder, unique_filename).replace("\\", "/")
+#     except Exception as e:
+#         print(f"Base64 解碼或儲存失敗: {e}")
+#         return None
+def save_uploaded_file(file, subfolder):
+    """安全地儲存上傳的檔案並返回其相對路徑"""
+    if file and file.filename != '' and allowed_file(file.filename):
+        original_filename = secure_filename(file.filename)
+        unique_filename = f"{uuid.uuid4().hex}_{original_filename}"
         save_path = os.path.join(app.config['UPLOAD_FOLDER'], subfolder, unique_filename)
-        with open(save_path, "wb") as f: f.write(data)
+        file.save(save_path)
         return os.path.join(subfolder, unique_filename).replace("\\", "/")
-    except Exception as e:
-        print(f"Base64 解碼或儲存失敗: {e}")
-        return None
+    return None
+
 
 
 def scrape_and_save_image(html_content):
@@ -84,19 +95,19 @@ def permission_required(required_permissions):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            user_id = request.headers.get('X-User-ID')
-            if not user_id:
-                return jsonify({'status': 401, 'message': '未提供使用者身分 (缺少 X-User-ID 標頭)', 'success': False}), 401
-            try:
-                with DBHandler() as db:
-                    user = db.find_user(user_id=int(user_id))
-                if not user:
-                    return jsonify({'status': 401, 'message': '無效的使用者 ID', 'success': False}), 401
-                g.user = user
-                if user['permission'] not in required_permissions and user['permission'] != 'manager':
-                    return jsonify({'status': 403, 'message': f"權限不足，此操作需要 {required_permissions} 等級。", 'success': False}), 403
-            except Exception as e:
-                return jsonify({'status': 500, 'message': f"驗證使用者身分時發生錯誤: {e}", 'success': False}), 500
+            # user_id = request.headers.get('X-User-ID')
+            # if not user_id:
+            #     return jsonify({'status': 401, 'message': '未提供使用者身分 (缺少 X-User-ID 標頭)', 'success': False}), 401
+            # try:
+            #     with DBHandler() as db:
+            #         user = db.find_user(user_id=int(user_id))
+            #     if not user:
+            #         return jsonify({'status': 401, 'message': '無效的使用者 ID', 'success': False}), 401
+            #     g.user = user
+            #     if user['permission'] not in required_permissions and user['permission'] != 'manager':
+            #         return jsonify({'status': 403, 'message': f"權限不足，此操作需要 {required_permissions} 等級。", 'success': False}), 403
+            # except Exception as e:
+            #     return jsonify({'status': 500, 'message': f"驗證使用者身分時發生錯誤: {e}", 'success': False}), 500
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -120,7 +131,7 @@ def handle_categories():
         category_type = request.args.get('category_type')
         with DBHandler() as db:
             categories = db.get_categories_by_type(category_type)
-            return jsonify({'status': 200, 'result': categories, 'success': True})
+            return jsonify({'status': 200, 'message': "success", 'result': categories, 'success': True})
 
     if request.method == 'POST':
         @permission_required('manager')
@@ -131,7 +142,7 @@ def handle_categories():
             with DBHandler() as db:
                 cat_id = db.insert_category(data['name'], data['category_type'])
                 if cat_id:
-                    return jsonify({'status': 201, 'message': '分類建立成功', 'id': cat_id, 'success': True}), 201
+                    return jsonify({'status': 200, 'message': '分類建立成功', 'id': cat_id, 'success': True}), 200
                 else:
                     return jsonify({'status': 400, 'message': '無法建立分類', 'success': False}), 400
         return create()
@@ -152,32 +163,59 @@ def handle_delete_category(category_id):
 def handle_posts():
     if request.method == 'GET':
         filters = {k: v for k, v in request.args.items() if k in ['title_keyword', 'category_id', 'user_id']}
+        order_by = request.args.get('order_by', 'announcement_date', type=str)
         page_size = request.args.get('page_size', 10, type=int)
         page = request.args.get('page', 1, type=int)
         offset = (page - 1) * page_size
         with DBHandler() as db:
-            posts = db.get_posts(filters=filters, page_size=page_size, offset=offset)
-            return jsonify({'status': 200, 'result': posts, 'success': True})
+            posts = db.get_posts(filters=filters, order_by = order_by, page_size=page_size, offset=offset)
+            return jsonify({'status': 200, 'message': "success", 'result': posts, 'success': True})
 
     if request.method == 'POST':
         @permission_required(['manager', 'editor'])
         def create():
-            data = request.get_json()
-            required = ['title', 'content', 'user_id', 'category_id']
+            # 1. 從 request.form 中取得 JSON 字串
+            metadata_str = request.form.get('metadata')
+            if not metadata_str:
+                return jsonify({'message': '缺少 metadata 欄位'}), 400
+            try:
+                data = json.loads(metadata_str)
+            except json.JSONDecodeError:
+                return jsonify({'message': 'metadata 格式錯誤，無法解析為 JSON'}), 400
+
+            required = ['title', 'content', 'category_id']
             if not data or not all(k in data for k in required):
                 return jsonify({'status': 400, 'message': f"缺少欄位: {required}", 'success': False}), 400
             
-            main_image_path = save_base64_file(data.get('main_image'), 'images') if data.get('main_image') else scrape_and_save_image(data['content'])
-            attachments_list = [save_base64_file(f, 'attachments') for f in data.get('attachments', [])]
+            # 處理 main_image
+            main_image_url = None
+            main_image_url = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
             
+            attachments_list = []
+            uploaded_attachments = request.files.getlist('attachments')
+            for file in uploaded_attachments:
+                path = save_uploaded_file(file, 'attachments')
+                if path:
+                    attachments_list.append({
+                        'path': path,
+                        'original_filename': secure_filename(file.filename)
+                    })
+
+            hashtags_list = [f for f in data.get('hashtags', [])]
+            
+
             with DBHandler() as db:
                 post_id = db.create_post(
-                    title=data['title'], content=data['content'], user_id=data['user_id'],
-                    category_id=data['category_id'], main_image_url=main_image_path,
-                    attachments=[{'path': p, 'original_filename': f.get('filename')} for p, f in zip(attachments_list, data.get('attachments', [])) if p]
-                )
+                    title=data['title'],
+                    content=data['content'],
+                    user_id=g.user['id'],
+                    category_id=data['category_id'],
+                    main_image_url=main_image_url,
+                    attachments=attachments_list,
+                    hash_tags = hashtags_list
+                    )
             if post_id:
-                return jsonify({'status': 201, 'message': "文章建立成功", 'id': post_id, 'success': True}), 201
+                return jsonify({'status': 200, 'message': "文章建立成功", 'id': post_id, 'success': True}), 201
             else:
                 return jsonify({'status': 500, 'message': "無法建立文章", 'success': False}), 500
         return create()
@@ -187,7 +225,7 @@ def handle_post_by_id(post_id):
     if request.method == 'GET':
         with DBHandler() as db:
             post = db.get_post(post_id)
-            return jsonify({'status': 200, 'result': post, 'success': True}) if post else jsonify({'status': 404, 'message': '找不到文章', 'success': False}), 404
+            return jsonify({'status': 200, "message": "success", 'result': post, 'success': True}) if post else jsonify({'status': 404, 'message': '找不到文章', 'success': False}), 404
 
     @permission_required(['manager', 'editor'])
     def protected_operation():
@@ -200,10 +238,18 @@ def handle_post_by_id(post_id):
                 return jsonify({'status': 403, 'message': '權限不足，只能操作自己的文章', 'success': False}), 403
 
             if request.method == 'PUT':
-                data = request.get_json()
-                if not data:
-                    return jsonify({'status': 400, 'message': "未包含更新資料", 'success': False}), 400
-                
+                metadata_str = request.form.get('metadata')
+                if not metadata_str:
+                    return jsonify({'message': '缺少 metadata 欄位'}), 400
+                try:
+                    data = json.loads(metadata_str)
+                except json.JSONDecodeError:
+                    return jsonify({'message': 'metadata 格式錯誤，無法解析為 JSON'}), 400
+
+                required = ['title', 'content', 'category_id']
+                if not data or not all(k in data for k in required):
+                    return jsonify({'status': 400, 'message': f"缺少欄位: {required}", 'success': False}), 400
+            
                 # 準備要傳遞給 DBHandler 的資料
                 update_data_for_db = {}
                 
@@ -213,31 +259,23 @@ def handle_post_by_id(post_id):
                         update_data_for_db[field] = data[field]
                 
                 # 處理主圖
-                if 'main_image' in data:
-                    if data['main_image'] is None:
-                        # 當前端傳入 null 時，從 content 重新抓取圖片
-                        content_to_scrape = data.get('content')
-                        update_data_for_db['main_image_url'] = scrape_and_save_image(content_to_scrape)
-                    elif isinstance(data['main_image'], dict):
-                        # 當前端傳入 Base64 物件時，儲存新圖片
-                        update_data_for_db['main_image_url'] = save_base64_file(data['main_image'], 'images')
+                update_data_for_db['main_image_url'] = save_uploaded_file(request.files['main_image'], 'images') if 'main_image_url' in request.file else scrape_and_save_image(data.get('content'))
                 
                 # 處理附件
-                if 'attachments' in data:
-                    new_attachments = []
-                    if isinstance(data['attachments'], list):
-                        for file_data in data['attachments']:
-                            path = save_base64_file(file_data, 'attachments')
-                            if path:
-                                new_attachments.append({
-                                    'path': path,
-                                    'original_filename': secure_filename(file_data.get('filename'))
-                                })
-                    update_data_for_db['attachments'] = new_attachments
+                attachments_list = []
+                uploaded_attachments = request.files.getlist('attachments')
+                for file in uploaded_attachments:
+                    path = save_uploaded_file(file, 'attachments')
+                    if path:
+                        attachments_list.append({
+                            'path': path,
+                            'original_filename': secure_filename(file.filename)
+                        })
+                    update_data_for_db['attachments'] = attachments_list
                 
                 # 處理標籤
-                if 'hashtags' in data:
-                    update_data_for_db['hashtags'] = data['hashtags']
+                hashtags_list = [f for f in data.get('hashtags', [])]
+                update_data_for_db['hashtags'] = hashtags_list
 
                 success = db.update_post(post_id, update_data_for_db)
                 return jsonify({'status': 200, 'message': '文章更新成功', 'success': True}) if success else jsonify({'status': 500, 'message': '更新失敗', 'success': False}), 500
@@ -263,7 +301,7 @@ def handle_bulletin_messages():
                     target_date=target_date, campus=request.args.get('campus'),
                     department=request.args.get('department'), page_size=page_size, offset=offset
                 )
-            return jsonify({'status': 200, 'result': bulletins, 'success': True})
+            return jsonify({'status': 200, "message": "success", 'result': bulletins, 'success': True})
         except Exception as e:
             return jsonify({'status': 400, 'message': str(e), 'success': False}), 400
 
@@ -277,7 +315,7 @@ def handle_bulletin_messages():
                 department=data.get('department'), campus=data.get('campus')
             )
         if message_id:
-            return jsonify({'status': 201, 'message': "留言新增成功", 'id': message_id, 'success': True}), 201
+            return jsonify({'status': 200, 'message': "留言新增成功", 'id': message_id, 'success': True}), 201
         else:
             return jsonify({'status': 500, 'message': "無法新增留言", 'success': False}), 500
 
@@ -287,4 +325,5 @@ def handle_delete_bulletin_message(message_id):
         success = db.delete_bulletin_message(message_id)
         return jsonify({'status': 200, 'message': "留言刪除成功", 'success': True}) if success else jsonify({'status': 404, 'message': "找不到要刪除的留言", 'success': False}), 404
 if __name__ == "__main__":
-    app.run(debug=True, port=5004)
+    print(scrape_and_save_image("<p>..</p><img src='https://images.pexels.com/photos/6347919/pexels-photo-6347919.jpeg?_gl=1*eun6qt*_ga*Nzc3OTQ5ODg2LjE3NTY0Mjg2MjY.*_ga_8JE65Q40S6*czE3NTY0Mjg2MjYkbzEkZzEkdDE3NTY0Mjg2MzYkajUwJGwwJGgw'><h1></h1>"))
+    # app.run(debug=True, port=5004)
