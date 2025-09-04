@@ -294,7 +294,7 @@ class DBHandler:
                 sql = "SELECT id, post_id, file_type, file_path, original_filename FROM files WHERE id = %s"
                 cur.execute(sql, (file_id,))
                 result = cur.fetchone()
-                return [dict(result)] if result else None
+                return dict(result) if result else None
         except psycopg2.Error as e:
             print(f"取得檔案時發生錯誤: {e}")
             return None
@@ -536,7 +536,7 @@ class DBHandler:
 
                 # 步驟 3: 一次性查詢所有相關的標籤
                 cur.execute("""
-                    SELECT pt.post_id, t.tag_name FROM hashtags t
+                    SELECT t.* FROM hashtags t
                     JOIN post_hashtags pt ON t.id = pt.hashtag_id
                     WHERE pt.post_id = ANY(%s);
                 """, (post_ids,))
@@ -629,11 +629,11 @@ if __name__ == "__main__":
             with DBHandler() as db:
                 # --- 在這裡執行所有資料庫操作 --------------------------------------------------------------------
                 
-                print("\n--- 1. 初始化資料庫 ---")
-                db.setup_database()
+                # print("\n--- 1. 初始化資料庫 ---")
+                # db.setup_database()
 
-                print("\n--- 2. 建立使用者 ---")
-                db.create_user("SHD", "edah.sh.department@gmail.com", "shdadmin", permission="manager")
+                # print("\n--- 2. 建立使用者 ---")
+                # db.create_user("SHD", "edah.sh.department@gmail.com", "shdadmin", permission="manager")
 
                 
                 # --- 在這裡執行留言板操作 ------------------------------------------------------------------------
